@@ -22,7 +22,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
+STATIC_URL = "/static/"
 
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = "django-insecure-3#lbjlgri5y8i)#b@og8i4r^$-d@d@^g611ntslo029to4pu=f"
 GRAPH_HOPPER_API_KEY = config("GRAPH_HOPPER_API_KEY")
