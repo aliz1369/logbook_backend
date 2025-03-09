@@ -17,7 +17,6 @@ import dj_database_url
 import environ
 from decouple import config
 
-
 env = environ.Env()
 environ.Env.read_env()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -51,7 +50,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middlewaare.CorsMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -61,7 +60,12 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-CORS_ALLOWED_ORIGINS = ["https://localhost:5173"]
+CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+]
+
 
 REST_FRAMEWORK = {"DEFAULT_RENDER_CLASSES": ["rest_framework.renderers.JSONRenderer"]}
 
@@ -90,7 +94,7 @@ WSGI_APPLICATION = "backend.wsgi.application"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 
-DATABASES = {"default": dj_database_url.config(default=config("DATABASE_URL"))}
+# DATABASES = {"default": dj_database_url.config(default=config("DATABASE_URL"))}
 
 DATABASES = {
     "default": {
