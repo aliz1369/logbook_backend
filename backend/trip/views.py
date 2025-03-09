@@ -1,13 +1,13 @@
 from datetime import datetime, time, timedelta
 
 import requests
-from django.utils.timezone import make_aware
+from django.conf import settings
+from django.utils.timezone import make_aware, now
 from rest_framework import generics, status
 from rest_framework.response import Response
 
 from .models import DailyLog, Driver, Trip, Vehicle
 from .serializers import DriverSerializer, TripSerializer, VehicleSerializer
-
 
 
 class TripCreateView(generics.ListCreateAPIView):
@@ -41,21 +41,21 @@ class TripCreateView(generics.ListCreateAPIView):
         dropoff_location = data["dropoff_location"]
 
         def get_route_distance_duration(start, end):
-            url = f"https://graphhopper.com/api/1/route?point={start['lat']},{start['lng']}&point={end['lat']},{end['lng']}&profile=truck&instructions=true&locale=en&calc_points=true&key={GRAPH_HOPPER_API_KEY}&points_encoded=false"
+            url = f"https://graphhopper.com/api/1/route?point={start['lat']},{start['lng']}&point={end['lat']},{end['lng']}&profile=truck&instructions=true&locale=en&calc_points=true&key={settings.GRAPH_HOPPER_API_KEY}&points_encoded=false"
             response = requests.get(url)
             if response.status_code != 200:
                 return None, None
             route = response.json()["paths"][0]
-            return (
-                route["distance"] / 1609,
-                route["time"] / 3_600_000,
-            )
+            distance = route["distance"] / 1609
+            duration = route["time"] / 3_600_000
+            waypoints = route["points"]["coordinates"]
+            return distance, duration, waypoints
 
-        distance_to_pickup, duration_to_pickup = get_route_distance_duration(
-            current_location, pickup_location
+        distance_to_pickup, duration_to_pickup, waypoints_to_pickup = (
+            get_route_distance_duration(current_location, pickup_location)
         )
-        distance_to_dropoff, duration_to_dropoff = get_route_distance_duration(
-            pickup_location, dropoff_location
+        distance_to_dropoff, duration_to_dropoff, waypoints_to_dropoff = (
+            get_route_distance_duration(pickup_location, dropoff_location)
         )
 
         if distance_to_pickup is None or distance_to_dropoff is None:
@@ -86,10 +86,19 @@ class TripCreateView(generics.ListCreateAPIView):
             date=trip_date,
         )
 
-        self.generate_logs(trip, duration_to_pickup, duration_to_dropoff)
+        self.generate_logs(
+            trip,
+            duration_to_pickup,
+            waypoints_to_dropoff,
+        )
         return Response(TripSerializer(trip).data, status=status.HTTP_201_CREATED)
 
-    def generate_logs(self, trip, duration_to_pickup, duration_to_dropoff):
+    def generate_logs(
+        self,
+        trip,
+        duration_to_pickup,
+        waypoints_to_dropoff,
+    ):
         start_datetime = make_aware(datetime.combine(trip.date, datetime.now().time()))
         logs = []
         miles_driven = 0
@@ -97,15 +106,9 @@ class TripCreateView(generics.ListCreateAPIView):
         last_fuel_stop = 0
         day_counter = 1
 
-        def get_stop_location(progress_ratio):
-            return {
-                "lat": trip.current_location["lat"]
-                + progress_ratio
-                * (trip.dropoff_location["lat"] - trip.current_location["lat"]),
-                "lng": trip.current_location["lng"]
-                + progress_ratio
-                * (trip.dropoff_location["lng"] - trip.current_location["lng"]),
-            }
+        def get_closest_waypoint(progress_ratio, waypoints):
+            index = min(int(progress_ratio * len(waypoints)), len(waypoints) - 1)
+            return {"lat": waypoints[index][1], "lng": waypoints[index][0]}
 
         def add_log_entry(start, duration, status, remarks, stop_location=None):
             end_time = start + duration
@@ -165,7 +168,6 @@ class TripCreateView(generics.ListCreateAPIView):
             timedelta(hours=duration_to_pickup),
             "offDuty",
             "Traveling to pickup location",
-            stop_location=trip.current_location,
         )
 
         start_datetime, day_counter = add_log_entry(
@@ -173,26 +175,29 @@ class TripCreateView(generics.ListCreateAPIView):
             timedelta(hours=1),
             "onDuty",
             "Pickup location - Loading cargo",
-            stop_location=trip.pickup_location,
         )
 
         while miles_driven < trip.distance_miles:
-            if hours_driven >= 6:
+            if hours_driven == 6:
                 start_datetime, day_counter = add_log_entry(
                     start_datetime,
                     timedelta(minutes=30),
                     "onDuty",
                     "Mandatory 30-min rest",
-                    stop_location=get_stop_location(miles_driven / trip.distance_miles),
+                    stop_location=get_closest_waypoint(
+                        miles_driven / trip.distance_miles, waypoints_to_dropoff
+                    ),
                 )
 
-            if hours_driven >= 11:
+            if hours_driven == 11:
                 start_datetime, day_counter = add_log_entry(
                     start_datetime,
                     timedelta(hours=10),
                     "sleeper",
                     "Mandatory 10-hour sleep",
-                    stop_location=get_stop_location(miles_driven / trip.distance_miles),
+                    stop_location=get_closest_waypoint(
+                        miles_driven / trip.distance_miles, waypoints_to_dropoff
+                    ),
                 )
                 hours_driven = 0
                 continue
@@ -204,7 +209,9 @@ class TripCreateView(generics.ListCreateAPIView):
                     timedelta(minutes=30),
                     "onDuty",
                     "Fuel stop",
-                    stop_location=get_stop_location(miles_driven / trip.distance_miles),
+                    stop_location=get_closest_waypoint(
+                        miles_driven / trip.distance_miles, waypoints_to_dropoff
+                    ),
                 )
 
             drive_duration = min(
@@ -222,15 +229,10 @@ class TripCreateView(generics.ListCreateAPIView):
             timedelta(hours=1),
             "onDuty",
             "Drop-off location - Unloading cargo",
-            stop_location=trip.dropoff_location,
         )
 
         start_datetime, day_counter = add_log_entry(
-            start_datetime,
-            timedelta(minutes=15),
-            "offDuty",
-            "Finished",
-            stop_location=trip.dropoff_location,
+            start_datetime, timedelta(minutes=15), "offDuty", "Finished"
         )
 
         trip.end_date = start_datetime.date()
