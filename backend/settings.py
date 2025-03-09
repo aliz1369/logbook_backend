@@ -57,9 +57,9 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-CORS_ALLOWED_ORIGINS = ["http://localhost:5173", "https://truck-logbook.vercel.app/"]
+CORS_ALLOWED_ORIGINS = ["http://localhost:5173", "https://truck-logbook.vercel.app"]
 
-CSRF_TRUSTED_ORIGINS = ["http://localhost:5173", "https://truck-logbook.vercel.app/"]
+CSRF_TRUSTED_ORIGINS = ["http://localhost:5173", "https://truck-logbook.vercel.app"]
 
 
 REST_FRAMEWORK = {"DEFAULT_RENDER_CLASSES": ["rest_framework.renderers.JSONRenderer"]}
