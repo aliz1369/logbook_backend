@@ -8,7 +8,6 @@ from rest_framework.response import Response
 from .models import DailyLog, Driver, Trip, Vehicle
 from .serializers import DriverSerializer, TripSerializer, VehicleSerializer
 
-GRAPH_HOPPER_API_KEY = "40df3919-cb8f-4849-8828-7cadb3b3d05a"
 
 
 class TripCreateView(generics.ListCreateAPIView):
