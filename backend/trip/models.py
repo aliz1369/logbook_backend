@@ -59,6 +59,7 @@ class Trip(models.Model):
     dropoff_location = models.JSONField()
     distance_miles = models.FloatField(null=True, blank=True)
     estimated_duration_hours = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Trip {self.id} - {self.driver.name} - {self.vehicle.car_number} - {self.date}"

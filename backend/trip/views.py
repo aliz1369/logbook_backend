@@ -42,14 +42,17 @@ class TripCreateView(generics.ListCreateAPIView):
 
         def get_route_distance_duration(start, end):
             url = f"https://graphhopper.com/api/1/route?point={start['lat']},{start['lng']}&point={end['lat']},{end['lng']}&profile=truck&instructions=true&locale=en&calc_points=true&key={settings.GRAPH_HOPPER_API_KEY}&points_encoded=false"
-            response = requests.get(url)
-            if response.status_code != 200:
-                return None, None
-            route = response.json()["paths"][0]
-            distance = route["distance"] / 1609
-            duration = route["time"] / 3_600_000
-            waypoints = route["points"]["coordinates"]
-            return distance, duration, waypoints
+            try:
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                route = response.json()["paths"][0]
+                return (
+                    route["distance"] / 1609,
+                    route["time"] / 3_600_000,
+                    route["points"]["coordinates"],
+                )
+            except (requests.RequestException, KeyError, IndexError):
+                return None, None, None
 
         distance_to_pickup, duration_to_pickup, waypoints_to_pickup = (
             get_route_distance_duration(current_location, pickup_location)
@@ -58,7 +61,7 @@ class TripCreateView(generics.ListCreateAPIView):
             get_route_distance_duration(pickup_location, dropoff_location)
         )
 
-        if distance_to_pickup is None or distance_to_dropoff is None:
+        if None in (distance_to_pickup, distance_to_dropoff):
             return Response(
                 {"error": "Failed to fetch route"}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -88,15 +91,24 @@ class TripCreateView(generics.ListCreateAPIView):
 
         self.generate_logs(
             trip,
+            distance_to_pickup,
             duration_to_pickup,
+            waypoints_to_pickup,
+            distance_to_dropoff,
+            duration_to_dropoff,
             waypoints_to_dropoff,
         )
+
         return Response(TripSerializer(trip).data, status=status.HTTP_201_CREATED)
 
     def generate_logs(
         self,
         trip,
+        distance_to_pickup,
         duration_to_pickup,
+        waypoints_to_pickup,
+        distance_to_dropoff,
+        duration_to_dropoff,
         waypoints_to_dropoff,
     ):
         start_datetime = make_aware(datetime.combine(trip.date, datetime.now().time()))
@@ -107,22 +119,22 @@ class TripCreateView(generics.ListCreateAPIView):
         day_counter = 1
 
         def get_closest_waypoint(progress_ratio, waypoints):
+            if not waypoints:
+                return {"lat": 0.0, "lng": 0.0}
             index = min(int(progress_ratio * len(waypoints)), len(waypoints) - 1)
             return {"lat": waypoints[index][1], "lng": waypoints[index][0]}
 
         def add_log_entry(start, duration, status, remarks, stop_location=None):
+            nonlocal day_counter
             end_time = start + duration
-            if end_time.date() > start.date():
-                end_before_midnight = make_aware(
-                    datetime.combine(start.date(), time(23, 59, 59))
-                )
 
+            if end_time.date() > start.date():
                 logs.append(
                     DailyLog(
                         trip=trip,
                         date=start.date(),
                         start_time=start.time(),
-                        end_time=end_before_midnight.time(),
+                        end_time=time(23, 59, 59),
                         status=status,
                         remarks=f"{remarks} (before midnight)",
                         stop_location=stop_location,
@@ -132,22 +144,23 @@ class TripCreateView(generics.ListCreateAPIView):
 
                 next_day = start.date() + timedelta(days=1)
                 new_start = make_aware(datetime.combine(next_day, time(0, 0, 0)))
-                remaining_duration = duration - (end_before_midnight - start)
+                remaining_duration = duration - (end_time - start)
 
+                day_counter += 1
                 logs.append(
                     DailyLog(
                         trip=trip,
                         date=new_start.date(),
-                        start_time=new_start.time(),
+                        start_time=time(0, 0, 0),
                         end_time=(new_start + remaining_duration).time(),
                         status=status,
                         remarks=f"{remarks} (after midnight)",
                         stop_location=stop_location,
-                        day=day_counter + 1,
+                        day=day_counter,
                     )
                 )
 
-                return new_start + remaining_duration, day_counter + 1
+                return new_start + remaining_duration
             else:
                 logs.append(
                     DailyLog(
@@ -161,81 +174,125 @@ class TripCreateView(generics.ListCreateAPIView):
                         day=day_counter,
                     )
                 )
-                return end_time, day_counter
+                return end_time
 
-        start_datetime, day_counter = add_log_entry(
+        def handle_drive_segment(
+            current_time, distance, segment_text, waypoints, is_off_duty=False
+        ):
+            nonlocal miles_driven, hours_driven, last_fuel_stop
+            remaining_distance = distance
+            last_rest_time = 0
+
+            while remaining_distance > 5:
+                miles_since_last_rest = miles_driven - last_rest_time
+                miles_until_rest = (
+                    max(0, (6 * 60) - miles_since_last_rest)
+                    if miles_since_last_rest < (6 * 60)
+                    else 0
+                )
+                miles_until_fuel = max(0, 1000 - (miles_driven - last_fuel_stop))
+                miles_until_sleep = max(0, (11 * 60) - (hours_driven * 60))
+
+                event_distances = [
+                    miles_until_rest,
+                    miles_until_fuel,
+                    miles_until_sleep,
+                    remaining_distance,
+                ]
+                next_event_miles = min([d for d in event_distances if d > 0])
+
+                if hours_driven >= 11 and remaining_distance > 0:
+                    stop_location = get_closest_waypoint(
+                        1 - (remaining_distance / distance), waypoints
+                    )
+                    current_time = add_log_entry(
+                        current_time,
+                        timedelta(hours=10),
+                        "sleeper",
+                        f"Mandatory sleep {segment_text}",
+                        stop_location,
+                    )
+                    hours_driven = 0
+                    last_rest_time = miles_driven
+                    remaining_distance -= next_event_miles
+                    miles_driven += next_event_miles
+                    continue
+
+                log_status = "offDuty" if is_off_duty else "driving"
+                log_activity = "Traveling" if is_off_duty else "Driving"
+                drive_hours = next_event_miles / 60
+                current_time = add_log_entry(
+                    current_time,
+                    timedelta(hours=drive_hours),
+                    log_status,
+                    f"{log_activity} {segment_text}",
+                )
+
+                miles_driven += next_event_miles
+                remaining_distance -= next_event_miles
+                hours_driven += drive_hours
+
+                if next_event_miles == miles_until_rest:
+                    stop_location = get_closest_waypoint(
+                        1 - (remaining_distance / distance), waypoints
+                    )
+                    current_time = add_log_entry(
+                        current_time,
+                        timedelta(minutes=30),
+                        "onDuty",
+                        f"Mandatory rest {segment_text}",
+                        stop_location,
+                    )
+                    last_rest_time = miles_driven
+
+                elif next_event_miles == miles_until_fuel:
+                    stop_location = get_closest_waypoint(
+                        1 - (remaining_distance / distance), waypoints
+                    )
+                    last_fuel_stop = miles_driven
+                    current_time = add_log_entry(
+                        current_time,
+                        timedelta(minutes=30),
+                        "onDuty",
+                        f"Fuel stop {segment_text}",
+                        stop_location,
+                    )
+
+            return current_time
+
+        current_datetime = handle_drive_segment(
             start_datetime,
-            timedelta(hours=duration_to_pickup),
-            "offDuty",
-            "Traveling to pickup location",
+            distance_to_pickup,
+            "to pickup location",
+            waypoints_to_pickup,
+            is_off_duty=True,
         )
-
-        start_datetime, day_counter = add_log_entry(
-            start_datetime,
+        current_datetime = add_log_entry(
+            current_datetime,
             timedelta(hours=1),
             "onDuty",
             "Pickup location - Loading cargo",
+            trip.pickup_location,
         )
-
-        while miles_driven < trip.distance_miles:
-            if hours_driven == 6:
-                start_datetime, day_counter = add_log_entry(
-                    start_datetime,
-                    timedelta(minutes=30),
-                    "onDuty",
-                    "Mandatory 30-min rest",
-                    stop_location=get_closest_waypoint(
-                        miles_driven / trip.distance_miles, waypoints_to_dropoff
-                    ),
-                )
-
-            if hours_driven == 11:
-                start_datetime, day_counter = add_log_entry(
-                    start_datetime,
-                    timedelta(hours=10),
-                    "sleeper",
-                    "Mandatory 10-hour sleep",
-                    stop_location=get_closest_waypoint(
-                        miles_driven / trip.distance_miles, waypoints_to_dropoff
-                    ),
-                )
-                hours_driven = 0
-                continue
-
-            if miles_driven - last_fuel_stop >= 1000:
-                last_fuel_stop = miles_driven
-                start_datetime, day_counter = add_log_entry(
-                    start_datetime,
-                    timedelta(minutes=30),
-                    "onDuty",
-                    "Fuel stop",
-                    stop_location=get_closest_waypoint(
-                        miles_driven / trip.distance_miles, waypoints_to_dropoff
-                    ),
-                )
-
-            drive_duration = min(
-                11 - hours_driven, (trip.distance_miles - miles_driven) / 60
-            )
-            start_datetime, day_counter = add_log_entry(
-                start_datetime, timedelta(hours=drive_duration), "driving", "Driving"
-            )
-
-            miles_driven += drive_duration * 60
-            hours_driven += drive_duration
-
-        start_datetime, day_counter = add_log_entry(
-            start_datetime,
+        current_datetime = handle_drive_segment(
+            current_datetime,
+            distance_to_dropoff,
+            "to dropoff location",
+            waypoints_to_dropoff,
+            is_off_duty=False,
+        )
+        current_datetime = add_log_entry(
+            current_datetime,
             timedelta(hours=1),
             "onDuty",
             "Drop-off location - Unloading cargo",
+            trip.dropoff_location,
+        )
+        current_datetime = add_log_entry(
+            current_datetime, timedelta(minutes=15), "offDuty", "Finished"
         )
 
-        start_datetime, day_counter = add_log_entry(
-            start_datetime, timedelta(minutes=15), "offDuty", "Finished"
-        )
-
-        trip.end_date = start_datetime.date()
+        trip.end_date = current_datetime.date()
         trip.save()
 
         DailyLog.objects.bulk_create(logs)
