@@ -21,14 +21,14 @@ class Driver(models.Model):
         logs = DailyLog.objects.filter(
             trip__driver=self, date__gte=last_8_days, date__lte=reference_date
         )
-        
+
         total_seconds = sum(
             (
                 datetime.combine(log.date, log.end_time)
                 - datetime.combine(log.date, log.start_time)
             ).total_seconds()
             for log in logs
-            if log.status in ["driving", "onDuty", "offDuty"] 
+            if log.status in ["driving", "onDuty", "offDuty"]
         )
 
         total_hours = total_seconds / 3600

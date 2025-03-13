@@ -129,12 +129,15 @@ class TripCreateView(generics.ListCreateAPIView):
             end_time = start + duration
 
             if end_time.date() > start.date():
+                end_before_midnight = make_aware(
+                    datetime.combine(start.date(), time(23, 59, 59))
+                )
                 logs.append(
                     DailyLog(
                         trip=trip,
                         date=start.date(),
                         start_time=start.time(),
-                        end_time=time(23, 59, 59),
+                        end_time=end_before_midnight.time(),
                         status=status,
                         remarks=f"{remarks} (before midnight)",
                         stop_location=stop_location,
@@ -144,7 +147,7 @@ class TripCreateView(generics.ListCreateAPIView):
 
                 next_day = start.date() + timedelta(days=1)
                 new_start = make_aware(datetime.combine(next_day, time(0, 0, 0)))
-                remaining_duration = duration - (end_time - start)
+                remaining_duration = duration - (end_before_midnight - start)
 
                 day_counter += 1
                 logs.append(

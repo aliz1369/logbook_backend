@@ -9,8 +9,6 @@ class DailyLogSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-
-
 class DriverSerializer(serializers.ModelSerializer):
     class Meta:
         model = Driver
@@ -22,8 +20,9 @@ class VehicleSerializer(serializers.ModelSerializer):
         model = Vehicle
         fields = "__all__"
 
+
 class TripSerializer(serializers.ModelSerializer):
-    driver = DriverSerializer(read_only=True) 
+    driver = DriverSerializer(read_only=True)
     vehicle = VehicleSerializer(read_only=True)
     logs = DailyLogSerializer(many=True, read_only=True)
 
