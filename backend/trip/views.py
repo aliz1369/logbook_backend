@@ -186,8 +186,8 @@ class TripCreateView(generics.ListCreateAPIView):
             while remaining_distance > 5:
                 miles_since_last_rest = miles_driven - last_rest_time
                 miles_until_rest = (
-                    max(0, (6 * 60) - miles_since_last_rest)
-                    if miles_since_last_rest < (6 * 60)
+                    max(0, (5 * 60) - miles_since_last_rest)
+                    if miles_since_last_rest < (5 * 60)
                     else 0
                 )
                 miles_until_fuel = max(0, 1000 - (miles_driven - last_fuel_stop))
