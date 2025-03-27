@@ -41,7 +41,7 @@ class TripCreateView(generics.ListCreateAPIView):
         dropoff_location = data["dropoff_location"]
 
         def get_route_distance_duration(start, end):
-            url = f"https://graphhopper.com/api/1/route?point={start['lat']},{start['lng']}&point={end['lat']},{end['lng']}&profile=truck&instructions=true&locale=en&calc_points=true&key={settings.GRAPH_HOPPER_API_KEY}&points_encoded=false"
+            url = f"https://graphhopper.com/api/1/route?point={start['lat']},{start['lng']}&point={end['lat']},{end['lng']}&profile=car&instructions=true&locale=en&calc_points=true&key={settings.GRAPH_HOPPER_API_KEY}&points_encoded=false"
             try:
                 response = requests.get(url, timeout=10)
                 response.raise_for_status()
